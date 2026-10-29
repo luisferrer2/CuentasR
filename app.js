@@ -1,0 +1,53 @@
+/* ===== INTERFAZ ===== */
+const {toCSV,fromCSV,merge,bal,fresh,uid}=CORE,$=s=>document.querySelector(s),KEY='contaflow_local_v1';
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const cop=n=>(n<0?'-':'')+'$'+new Intl.NumberFormat('es-CO').format(Math.abs(n))+' COP',dmy=d=>d.split('-').reverse().join('/');
+const today=()=>new Date().toLocaleDateString('en-CA',{timeZone:'America/Bogota'});
+const CATS={income:['Ventas','Servicios','Otros ingresos'],expense:['Arriendo','Servicios públicos','Nómina','Transporte','Compras de mercancía','Materias primas','Mantenimiento','Publicidad','Impuestos','Comisiones','Papelería','Otros gastos']};
+const METHODS=['efectivo','transferencia','tarjeta','otros'];
+let S;try{S=JSON.parse(localStorage.getItem(KEY))||fresh()}catch{S=fresh()}
+let view='inicio',range=[today().slice(0,8)+'01',today()],q='';
+function toast(m,e){const t=$('#t');t.textContent=m;t.className='on'+(e?' e':'');clearTimeout(toast.i);toast.i=setTimeout(()=>t.className='',3500)}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch{toast('No se pudo guardar en este navegador. Exporta tu CSV ahora.',1)}}
+const opts=(l,f=x=>x)=>l.map(x=>`<option value="${esc(f(x))}">${esc(x.name||x)}</option>`).join('');
+const sum=(k,f,t)=>S.movements.filter(m=>m.kind===k&&m.status==='active'&&m.date>=f&&m.date<=t).reduce((s,m)=>s+m.amount,0);
+function render(){
+  if(!S.company){$('#app').innerHTML=`<main><form class="card g" data-f="setup"><h2 style="grid-column:1/-1">Bienvenido a ContaFlow Local</h2><p class="mut" style="grid-column:1/-1">Tus datos se guardan en este navegador. Para llevarlos a otro computador usa Datos → Exportar CSV.</p><label>Nombre del negocio<input name="n" required maxlength="100"></label><button class="b">Crear negocio</button></form><form class="card" data-f="import0"><h3>¿Ya tienes un CSV de este negocio?</h3><input type="file" accept=".csv,text/csv" data-imp="replace"></form></main>`;return}
+  const old=!S.lastExport||(Date.now()-S.lastExport)>7*864e5,tabs=[['inicio','Inicio'],['ingresos','Ingresos'],['gastos','Gastos'],['cajas','Cajas y bancos'],['datos','Datos (CSV)']];
+  $('#app').innerHTML=`<header><b>${esc(S.company)}</b>${tabs.map(([k,l])=>`<button data-v="${k}" class="${view===k?'on':''}">${l}</button>`).join('')}</header><main>${S.movements.length&&old?`<div class="warn">No has exportado un respaldo en los últimos 7 días. Ve a <b>Datos (CSV)</b> y descárgalo.</div>`:''}${V[view]()}</main>`}
+const kpi=(l,v,c='',s='')=>`<div class="card kpi"><small>${l}</small><b class="${c}">${cop(v)}</b><small>${s}</small></div>`;
+const V={
+inicio(){const[f,t]=range,i=sum('income',f,t),e=sum('expense',f,t),cash=S.accounts.reduce((s,a)=>s+bal(S,a.id),0),by={};
+  S.movements.filter(m=>m.kind==='expense'&&m.status==='active'&&m.date>=f&&m.date<=t).forEach(m=>by[m.cat]=(by[m.cat]||0)+m.amount);const cats=Object.entries(by).sort((a,b)=>b[1]-a[1]),mx=Math.max(1,...cats.map(c=>c[1]));
+  return`<h2>Inicio</h2><form class="card g" data-f="range"><label>Desde<input type="date" name="f" value="${f}"></label><label>Hasta<input type="date" name="t" value="${t}"></label><button class="b">Actualizar</button></form>
+  <div class="kpis">${kpi('Ingresos',i,'pos')}${kpi('Gastos',e)}${kpi('Resultado',i-e,i-e<0?'neg':'pos')}${kpi('Dinero disponible',cash,'','Saldo real en cajas y bancos')}</div>
+  ${S.movements.length?`<div class="card"><h3>Gastos por categoría</h3>${cats.map(([n,v])=>`<div class="bar"><span>${esc(n)}</span><i style="width:${v/mx*100}%"></i><span>${cop(v)}</span></div>`).join('')||'<span class="mut">Sin gastos en este periodo</span>'}</div>`:`<div class="card empty">Aún no hay movimientos. Registra tu primer <a href="#" data-v="ingresos">ingreso</a> o <a href="#" data-v="gastos">gasto</a>.</div>`}`},
+mov(kind){const inc=kind==='income',rows=S.movements.filter(m=>m.kind===kind&&m.desc.toLowerCase().includes(q.toLowerCase())).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,300);
+  return`<h2>${inc?'Ingresos':'Gastos'}</h2><form class="card g" data-f="mov"><label>Fecha<input type="date" name="date" value="${today()}" required></label><label>Valor (COP)<input type="number" name="amount" min="1" step="1" required></label><label>Descripción<input name="desc" required maxlength="200"></label><label>Categoría<select name="cat">${opts(CATS[kind])}</select></label><label>Cuenta<select name="acc">${opts(S.accounts,a=>a.id)}</select></label><label>Método<select name="method">${opts(METHODS)}</select></label><label>Referencia<input name="ref" maxlength="60"></label><button class="b">Registrar</button></form>
+  <div class="card"><form class="g" data-f="search"><label>Buscar<input name="q" value="${esc(q)}"></label><button class="b">Buscar</button></form>${rows.length?`<div class="s"><table><tr><th>Fecha</th><th>Descripción</th><th>Categoría</th><th>Cuenta</th><th class="n">Valor</th><th></th></tr>${rows.map(m=>`<tr class="${m.status==='void'?'v':''}"><td>${dmy(m.date)}</td><td>${esc(m.desc)}</td><td>${esc(m.cat)}</td><td>${esc(S.accounts.find(a=>a.id===m.acc)?.name)}</td><td class="n">${cop(m.amount)}</td><td>${m.status==='active'?`<button class="r" data-void="${m.id}">Anular</button>`:'Anulado'}</td></tr>`).join('')}</table></div>`:'<div class="empty">No hay registros.</div>'}</div>`},
+ingresos(){return V.mov('income')},gastos(){return V.mov('expense')},
+cajas(){const o=opts(S.accounts,a=>a.id);return`<h2>Cajas y bancos</h2><div class="card s"><table><tr><th>Cuenta</th><th>Tipo</th><th class="n">Saldo inicial</th><th class="n">Saldo actual</th></tr>${S.accounts.map(a=>`<tr><td>${esc(a.name)}</td><td>${a.type}</td><td class="n">${cop(a.opening)}</td><td class="n">${cop(bal(S,a.id))}</td></tr>`).join('')}</table></div>
+  <form class="card g" data-f="acc"><label>Nombre<input name="n" required maxlength="60"></label><label>Tipo<select name="t"><option>caja</option><option>banco</option><option>otro</option></select></label><label>Saldo inicial<input type="number" name="o" min="0" step="1" value="0"></label><button class="b">Crear cuenta</button></form>
+  <form class="card g" data-f="tr"><label>Desde<select name="a">${o}</select></label><label>Hacia<select name="b">${o}</select></label><label>Valor<input type="number" name="v" min="1" step="1" required></label><label>Fecha<input type="date" name="d" value="${today()}"></label><button class="b">Transferir</button></form><p class="mut">Las transferencias no cuentan como ingreso ni gasto.</p>`},
+datos(){return`<h2>Datos (CSV)</h2><div class="card"><h3>Exportar</h3><p class="mut">Descarga todo el negocio en un CSV (se abre en Excel). Úsalo como respaldo y para llevarlo a otro computador. ${S.lastExport?'Último respaldo: '+new Date(S.lastExport).toLocaleString('es-CO',{timeZone:'America/Bogota'}):'Aún no has exportado.'}</p><button class="b" data-exp>Descargar CSV</button></div>
+  <div class="card"><h3>Importar</h3><label>Qué hacer con los datos actuales<select id="mode"><option value="merge">Combinar (agrega lo nuevo, sin duplicar)</option><option value="replace">Reemplazar todo con el CSV</option></select></label><br><input type="file" accept=".csv,text/csv" data-imp="ask"></div>
+  <div class="warn"><b>Importante:</b> los datos viven en este navegador. Si borras los datos del navegador o cambias de computador, solo los recuperas con tu CSV. El CSV no tiene contraseña ni cifrado: cualquiera que lo tenga ve tu contabilidad; guárdalo en un lugar seguro. No hay usuarios ni permisos.</div>
+  <div class="card"><button class="r" data-wipe>Borrar todos los datos de este navegador</button></div>`}};
+document.addEventListener('click',e=>{const t=e.target.closest('[data-v],[data-void],[data-exp],[data-wipe]');if(!t)return;e.preventDefault();
+  if(t.dataset.v){view=t.dataset.v;render()}
+  else if(t.dataset.void){if(!confirm('¿Anular este registro? Quedará en el historial como anulado.'))return;const m=S.movements.find(x=>x.id===t.dataset.void);S.movements.forEach(x=>{if(x.id===m.id||(m.tid&&x.tid===m.tid))x.status='void'});save();render();toast('Registro anulado')}
+  else if('exp' in t.dataset){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([toCSV(S)],{type:'text/csv;charset=utf-8'}));a.download=`contaflow_${S.company.replace(/[^\w]+/g,'_')}_${today()}.csv`;a.click();S.lastExport=Date.now();save();render();toast('CSV descargado')}
+  else if('wipe' in t.dataset){if(confirm('Se borrarán TODOS los datos de este navegador. ¿Exportaste tu CSV?')&&confirm('Última confirmación: ¿borrar todo?')){S=fresh();save();view='inicio';render()}}});
+document.addEventListener('change',e=>{const f=e.target.files?.[0];if(!f||!('imp' in e.target.dataset))return;const r=new FileReader();r.onload=()=>{const x=fromCSV(String(r.result));if(x.err){toast(x.err.join(' · '),1);return}
+  const mode=e.target.dataset.imp==='replace'||!S.company?'replace':$('#mode').value;
+  if(mode==='replace'){if(S.movements.length&&!confirm('Se reemplazarán los datos actuales por los del CSV. ¿Continuar?'))return;S=x.S;toast('Datos cargados: '+S.movements.length+' movimientos')}
+  else{const m=merge(S,x.S);toast(`Combinado: ${m.added} nuevos, ${m.voided} anulaciones aplicadas`)}save();view='inicio';render()};r.readAsText(f,'utf-8')});
+document.addEventListener('submit',e=>{e.preventDefault();const f=e.target.dataset.f,d=Object.fromEntries(new FormData(e.target)),n=Number(d.amount||d.v||0);
+  if(f==='setup'){S.company=d.n.trim();S.accounts=[{id:uid(),name:'Caja principal',type:'caja',opening:0}]}
+  else if(f==='range'){if(d.f>d.t)return toast('Rango inválido',1);range=[d.f,d.t]}
+  else if(f==='search'){q=d.q}
+  else if(f==='mov'){if(!Number.isSafeInteger(n)||n<=0)return toast('El valor debe ser un entero positivo',1);S.movements.push({id:uid(),kind:view==='ingresos'?'income':'expense',date:d.date,desc:d.desc.trim(),cat:d.cat,acc:d.acc,amount:n,method:d.method,ref:d.ref,status:'active',tid:null});toast('Registrado')}
+  else if(f==='acc'){if(S.accounts.some(a=>a.name===d.n.trim()))return toast('Esa cuenta ya existe',1);S.accounts.push({id:uid(),name:d.n.trim(),type:d.t,opening:Math.max(0,Math.trunc(Number(d.o))||0)})}
+  else if(f==='tr'){if(d.a===d.b)return toast('Origen y destino deben ser distintos',1);if(!Number.isSafeInteger(n)||n<=0)return toast('Valor inválido',1);const tid=uid(),b={date:d.d,desc:'Transferencia entre cuentas',cat:'',amount:n,method:'transferencia',ref:'',status:'active',tid};S.movements.push({...b,id:uid(),kind:'transfer_out',acc:d.a},{...b,id:uid(),kind:'transfer_in',acc:d.b});toast('Transferencia registrada')}
+  save();render()});
+render();
